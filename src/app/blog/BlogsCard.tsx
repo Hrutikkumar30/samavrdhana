@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import parse from "html-react-parser";
@@ -40,18 +40,16 @@ export default function BlogsCard() {
   const [totalItems, setTotalItems] = useState(0);
   const [shareMenuVisible, setShareMenuVisible] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [sharableLink, setSharableLink] = useState("");
-
   const { data: session, status } = useSession();
   const itemsPerPage = 5;
-  const AUTO_SCROLL_INTERVAL = 4000; // Slide every 2 seconds
-  const STAGGER_OFFSET = 1000; // 500ms delay per card (adjust for more/less variation)
-  const useAutoScroll = true; // Set to false to disable auto-scroll entirely
+  const AUTO_SCROLL_INTERVAL = 4000;
+  const STAGGER_OFFSET = 1000;
+  const useAutoScroll = true;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const router = useRouter();
 
-  // Fetch blogs with robust validation
+  // Fetch blogs client-side with session enhancements
   useEffect(() => {
     setIsLoading(true);
     const fetchBlogs = async () => {
@@ -65,12 +63,12 @@ export default function BlogsCard() {
           const blogsWithEngagement = response.data.data.map((blog) => ({
             ...blog,
             id:
-              blog.id || `fallback-${Math.random().toString(36).substr(2, 9)}`, // Ensure unique ID
+              blog.id || `fallback-${Math.random().toString(36).substr(2, 9)}`,
             like: blog.like || 0,
             unlike: blog.unlike || 0,
             blogImages: Array.isArray(blog.blogImages)
               ? blog.blogImages.filter((img) => img && img.image)
-              : [], // Filter invalid images
+              : [],
             hasLikedByUser: (blog.blogUsers || []).some(
               (user) =>
                 user.user.email === session?.user?.email && user.isLike === true
@@ -88,8 +86,19 @@ export default function BlogsCard() {
             commentCount: blog.commentCount || 0,
           }));
           setBlogData(blogsWithEngagement);
-          setSharableLink(window.location.href);
           setTotalItems(response.total || response.data.data.length);
+
+          // ✅ DEBUG: Check titles/images
+          console.log("✅ Fetched Blogs:", {
+            count: blogsWithEngagement.length,
+            titles: blogsWithEngagement.map((b) => b.title).slice(0, 5),
+            hasUniqueTitles:
+              new Set(blogsWithEngagement.map((b) => b.title)).size ===
+              blogsWithEngagement.length,
+            sampleImages: blogsWithEngagement
+              .slice(0, 3)
+              .map((b) => b.blogImages[0]?.image),
+          });
         } else {
           setBlogData([]);
         }
@@ -103,7 +112,7 @@ export default function BlogsCard() {
     fetchBlogs();
   }, [session?.user?.email]);
 
-  // Handle click outside for share menu
+  // Handle click outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (
@@ -117,14 +126,19 @@ export default function BlogsCard() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [shareMenuVisible]);
 
-  // Pagination logic
+  // Memoize currentItems
+  const currentItems = useMemo(() => {
+    const total = totalItems || blogData.length;
+    const totalPages = Math.ceil(total / itemsPerPage);
+    return Array.isArray(blogData)
+      ? blogData.slice(
+          (currentPage - 1) * itemsPerPage,
+          Math.min(currentPage * itemsPerPage, total)
+        )
+      : [];
+  }, [blogData, currentPage, totalItems, itemsPerPage]);
+
   const totalPages = Math.ceil((totalItems || blogData.length) / itemsPerPage);
-  const currentItems = Array.isArray(blogData)
-    ? blogData.slice(
-        (currentPage - 1) * itemsPerPage,
-        currentPage * itemsPerPage
-      )
-    : [];
 
   const paginate = (pageNumber) => setCurrentPage(pageNumber);
   const goToPreviousPage = () => {
@@ -134,7 +148,7 @@ export default function BlogsCard() {
     if (currentPage < totalPages) setCurrentPage(currentPage + 1);
   };
 
-  const getPageNumbers = () => {
+  const getPageNumbers = useCallback(() => {
     const pageNumbers = [];
     const maxPagesToShow = 5;
     if (totalPages <= maxPagesToShow) {
@@ -151,7 +165,7 @@ export default function BlogsCard() {
       pageNumbers.push(totalPages);
     }
     return pageNumbers;
-  };
+  }, [currentPage, totalPages]);
 
   // Share and copy logic
   const handleShareClick = (e, blogId) => {
@@ -164,9 +178,9 @@ export default function BlogsCard() {
     e.preventDefault();
     e.stopPropagation();
     if (!blog) return;
-    const currentUrl = `${window.location.origin}/blog-details/${blog.id}`;
+    const blogUrl = `${window.location.origin}/blog-details/${blog.id}`;
     const title = blog?.title || "Check out this blog post";
-    const shareText = `${title}\n\nRead more: ${currentUrl}`;
+    const shareText = `${title}\n\nRead more: ${blogUrl}`;
     navigator.clipboard
       .writeText(shareText)
       .then(() => alert("Link copied to clipboard!"))
@@ -283,17 +297,20 @@ export default function BlogsCard() {
     }
   };
 
-  // BlogCard component for individual carousel management
+  // BlogCard component
   const BlogCard = ({ blog, index }) => {
     const [api, setApi] = useState();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isHeld, setIsHeld] = useState(false);
 
-    // Auto-scroll logic with stagger offset
+    // Compute blog-specific URL for sharing
+    const blogUrl = `${window.location.origin}/blog-details/${blog.id}`;
+    const truncatedDesc = blog.description?.substring(0, 150) || "";
+
+    // Auto-scroll logic
     useEffect(() => {
       if (!api || isHeld || !useAutoScroll) return;
 
-      // Stagger start: Delay by index * offset ms
       const staggerDelay = setTimeout(() => {
         const autoSlideTimer = setInterval(() => {
           if (api && !isHeld) {
@@ -301,14 +318,13 @@ export default function BlogsCard() {
           }
         }, AUTO_SCROLL_INTERVAL);
 
-        // Cleanup timer on unmount or change
         return () => clearInterval(autoSlideTimer);
       }, index * STAGGER_OFFSET);
 
       return () => clearTimeout(staggerDelay);
     }, [api, isHeld, index]);
 
-    // Sync currentIndex with carousel changes
+    // Sync currentIndex
     useEffect(() => {
       if (!api) return;
 
@@ -320,7 +336,7 @@ export default function BlogsCard() {
       };
 
       api.on("select", onChange);
-      api.on("settle", onChange); // Additional settle event for stability
+      api.on("settle", onChange);
 
       return () => {
         api.off("select", onChange);
@@ -334,9 +350,8 @@ export default function BlogsCard() {
       if (api) {
         api.scrollTo(dotIndex);
         setCurrentIndex(dotIndex);
-        // Pause auto-scroll briefly on manual navigation
         setIsHeld(true);
-        setTimeout(() => setIsHeld(false), 100); // Short pause to prevent immediate next scroll
+        setTimeout(() => setIsHeld(false), 100);
       }
     };
 
@@ -360,7 +375,7 @@ export default function BlogsCard() {
                   opts={{
                     slidesToScroll: 1,
                     loop: true,
-                    align: "start", // Ensure proper alignment to prevent misplacement
+                    align: "start",
                   }}
                 >
                   <CarouselContent
@@ -373,7 +388,7 @@ export default function BlogsCard() {
                   >
                     {blog.blogImages.map((image, imgIndex) => (
                       <CarouselItem
-                        key={`${blog.id}-image-${imgIndex}`} // Unique key per blog
+                        key={`${blog.id}-image-${imgIndex}`}
                         className="h-[30vw] lg:h-[25vw]"
                       >
                         <div className="w-full h-full relative">
@@ -386,17 +401,19 @@ export default function BlogsCard() {
                             alt={`blog image ${imgIndex + 1}`}
                             fill
                             sizes="(max-width: 768px) 100vw, 45vw"
-                            className="" // Prevent weird stretching
+                            className="object-cover"
+                            onError={(e) => {
+                              e.currentTarget.src = "/placeholder-image.jpg";
+                            }}
                           />
                         </div>
                       </CarouselItem>
                     ))}
                   </CarouselContent>
-                  {/* Dots for navigation */}
                   <div className="flex justify-center gap-2 absolute bottom-4 left-0 right-0 z-10">
                     {blog.blogImages.map((_, dotIndex) => (
                       <button
-                        key={`${blog.id}-dot-${dotIndex}`} // Unique key per blog
+                        key={`${blog.id}-dot-${dotIndex}`}
                         className={`w-2 h-2 rounded-full transition-all ${
                           currentIndex === dotIndex
                             ? "bg-white scale-125"
@@ -421,6 +438,9 @@ export default function BlogsCard() {
                     fill
                     sizes="(max-width: 768px) 100vw, 45vw"
                     className="object-cover"
+                    onError={(e) => {
+                      e.currentTarget.src = "/placeholder-image.jpg";
+                    }}
                   />
                 </div>
               )}
@@ -540,14 +560,11 @@ export default function BlogsCard() {
                       <ShareIcon />
                     </div>
 
-                    {/* Share Menu Popup */}
+                    {/* Share Menu with per-blog URL */}
                     {shareMenuVisible === blog.id && (
                       <div className="absolute right-0 bottom-10 bg-white shadow-lg rounded-md p-2 z-10 min-w-[200px]">
                         <div className="flex flex-col gap-4">
-                          <FacebookShareButton
-                            url={sharableLink}
-                            quote={blog.title}
-                          >
+                          <FacebookShareButton url={blogUrl} quote={blog.title}>
                             <div className="flex items-center gap-2">
                               <FacebookIcon size={24} round />
                               <span>Facebook</span>
@@ -555,9 +572,9 @@ export default function BlogsCard() {
                           </FacebookShareButton>
 
                           <LinkedinShareButton
-                            url={sharableLink}
+                            url={blogUrl}
                             title={blog.title}
-                            summary={blog.description?.substring(0, 150) || ""}
+                            summary={truncatedDesc}
                             source="Samvardhana Properties – Real Estate Projects & Developers"
                           >
                             <div className="flex items-center gap-2">
@@ -567,9 +584,9 @@ export default function BlogsCard() {
                           </LinkedinShareButton>
 
                           <TwitterShareButton
-                            url={sharableLink}
+                            url={blogUrl}
                             title={blog.title}
-                            hashtags={[blog.title.split(" ")[0]]}
+                            hashtags={blog.title.split(" ").slice(0, 3)}
                             via="SamvardhanaProps"
                           >
                             <div className="flex items-center gap-2">
@@ -579,10 +596,8 @@ export default function BlogsCard() {
                           </TwitterShareButton>
 
                           <WhatsappShareButton
-                            url={sharableLink}
-                            title={`${
-                              blog.title
-                            } - ${blog.description.substring(0, 50)}...`}
+                            url={blogUrl}
+                            title={`${blog.title} - ${truncatedDesc}...`}
                             separator=" | "
                           >
                             <div className="flex items-center gap-3">
@@ -592,9 +607,9 @@ export default function BlogsCard() {
                           </WhatsappShareButton>
 
                           <EmailShareButton
-                            url={sharableLink}
+                            url={blogUrl}
                             subject={blog.title}
-                            body="Checkout this Blog:"
+                            body={`Checkout this Blog: ${truncatedDesc}`}
                           >
                             <div className="flex items-center gap-3">
                               <EmailIcon size={26} round />
@@ -656,7 +671,7 @@ export default function BlogsCard() {
 
             {getPageNumbers().map((number, index) => (
               <button
-                key={`page-${index}`} // Unique key
+                key={`page-${index}`}
                 onClick={() => number !== "..." && paginate(number)}
                 className={`w-10 h-10 flex items-center justify-center rounded-md border ${
                   number === currentPage
